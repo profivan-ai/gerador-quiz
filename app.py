@@ -13,7 +13,7 @@ st.markdown("Transforme vídeos do YouTube ou arquivos locais em questões de es
 # API Key (Substitua pela sua ou use st.secrets)
 API_KEY = "AIzaSyBxuQS66hAUkl_pg7Ozx28rup3r6BAODUA"
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 def extrair_id(url):
     pattern = r"(?:v=|\/|embed\/|youtu.be\/|v\/|watch\?v=|&v=|^)([0-9A-Za-z_-]{11})"
