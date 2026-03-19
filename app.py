@@ -17,7 +17,7 @@ API_KEY = st.text_input("Insira sua nova Gemini API Key:", type="password")
 
 if API_KEY:
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
 
     def extrair_id(url):
         pattern = r"(?:v=|\/|embed\/|youtu.be\/|v\/|watch\?v=|&v=|^)([0-9A-Za-z_-]{11})"
