@@ -1,91 +1,98 @@
 import streamlit as st
 import google.generativeai as genai
 from youtube_transcript_api import YouTubeTranscriptApi
+from pytubefix import YouTube
 import re
+import os
+import time
 
-# Configuração da Página
-st.set_page_config(page_title="Gerador de Quiz IA", page_icon="🎓", layout="centered")
-
+# Configuração
+st.set_page_config(page_title="Gerador de Quiz IA", page_icon="🎓")
 st.title("🎥 YouTube para Questionário")
-st.markdown("Gere 5 questões de múltipla escolha a partir de qualquer vídeo com legendas.")
 
-# 1. Configurar API Key (Chave fixa fornecida)
+# API Key fixa
 API_KEY = "AIzaSyBxuQS66hAUkl_pg7Ozx28rup3r6BAODUA"
+genai.configure(api_key=API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-def extrair_video_id(url):
-    """Extrai o ID do vídeo de URLs do YouTube"""
-    reg_exp = r"(?:v=|\/|embed\/|youtu.be\/)([0-9A-Za-z_-]{11})"
-    match = re.search(reg_exp, url)
+def extrair_id(url):
+    match = re.search(r"(?:v=|\/|embed\/|youtu.be\/)([0-9A-Za-z_-]{11})", url)
     return match.group(1) if match else None
 
-def obter_texto_video(video_id):
-    """Busca a transcrição ignorando bloqueios de 403 (usa API de legendas)"""
+def obter_via_legenda(v_id):
+    """Tenta obter o texto das legendas"""
     try:
-        # 1. Tenta pegar a lista de todas as legendas
-        lista_transcricoes = YouTubeTranscriptApi.list_transcripts(video_id)
-        
-        # 2. Tenta Português, senão Inglês, senão a primeira disponível
+        t_list = YouTubeTranscriptApi.list_transcripts(v_id)
         try:
-            transcricao = lista_transcricoes.find_transcript(['pt', 'en'])
+            t = t_list.find_transcript(['pt', 'en'])
         except:
-            transcricao = next(iter(lista_transcricoes))
-            
-        # 3. Se a legenda for em outro idioma, tenta traduzir para PT via API do YT
-        try:
-            transcricao_final = transcricao.translate('pt').fetch()
-        except:
-            transcricao_final = transcricao.fetch()
-            
-        return " ".join([t['text'] for t in transcricao_final])
-    except Exception as e:
-        raise Exception("Não foi possível extrair o texto. O vídeo pode estar sem legendas habilitadas.")
+            t = next(iter(t_list))
+        return " ".join([i['text'] for i in t.fetch()])
+    except:
+        return None
 
-# Configuração da IA
-try:
-    genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except Exception as e:
-    st.error(f"Erro na API: {e}")
+def baixar_audio_pytube(url):
+    """Baixa apenas o áudio usando pytubefix (mais resistente ao 403)"""
+    yt = YouTube(url, use_oauth=False, allow_oauth_cache=True)
+    audio = yt.streams.filter(only_audio=True).first()
+    out_file = audio.download(filename="temp_audio.mp4")
+    return out_file
 
 # Interface
-video_url = st.text_input("URL do Vídeo do YouTube:", placeholder="https://www.youtube.com/watch?v=ZYCBFwdekwM")
+video_url = st.text_input("Cole a URL do YouTube:", placeholder="https://www.youtube.com/watch?v=...")
 
 if st.button("Gerar Questionário"):
-    if not video_url:
-        st.warning("Insira uma URL.")
+    v_id = extrair_id(video_url)
+    if not v_id:
+        st.error("URL Inválida.")
     else:
-        v_id = extrair_video_id(video_url)
-        if not v_id:
-            st.error("ID do vídeo não encontrado na URL.")
-        else:
-            try:
-                with st.spinner("Analisando o conteúdo do vídeo..."):
-                    texto_completo = obter_texto_video(v_id)
-
-                with st.spinner("Criando questões com IA..."):
-                    prompt = f"""
-                    Abaixo está a transcrição de um vídeo. Com base nela, crie:
-                    1. 05 questões de múltipla escolha em Português.
-                    2. 04 alternativas por questão (A, B, C, D).
-                    3. Use Markdown: ## para Títulos e ** para a Resposta Correta.
+        try:
+            conteudo_para_ia = None
+            
+            # PASSO 1: Tentar Legendas (Super Rápido)
+            with st.spinner("Buscando legendas..."):
+                texto = obter_via_legenda(v_id)
+            
+            if texto:
+                st.info("Legendas encontradas! Processando...")
+                conteudo_para_ia = [f"Baseado nesta transcrição, crie o quiz:\n\n{texto}"]
+            else:
+                # PASSO 2: Se não tem legenda, baixa o áudio (Fallback)
+                st.warning("Vídeo sem legendas. Extraindo áudio para análise da IA...")
+                path_audio = baixar_audio_pytube(video_url)
+                
+                with st.spinner("Fazendo upload do áudio para o Gemini..."):
+                    audio_file = genai.upload_file(path=path_audio)
+                    while audio_file.state.name == "PROCESSING":
+                        time.sleep(2)
+                        audio_file = genai.get_file(audio_file.name)
                     
-                    Transcrição:
-                    {texto_completo}
+                    conteudo_para_ia = [audio_file, "Analise este áudio e crie o questionário."]
+                
+                os.remove(path_audio) # Limpa o servidor
+
+            # PASSO 3: Gerar com Gemini
+            if conteudo_para_ia:
+                with st.spinner("Gerando 5 questões..."):
+                    prompt = """
+                    Crie um questionário com:
+                    - 05 questões de múltipla escolha (A, B, C, D).
+                    - Formato Markdown com ## para cada pergunta.
+                    - Resposta correta em negrito ao final de cada questão.
                     """
-                    response = model.generate_content(prompt)
-
-                    st.success("Questionário Gerado!")
-                    st.divider()
-                    st.markdown(response.text)
+                    # Adiciona o prompt à lista de conteúdo
+                    if isinstance(conteudo_para_ia, list):
+                        conteudo_para_ia.append(prompt)
                     
-                    st.download_button(
-                        label="Baixar Questionário (.md)",
-                        data=response.text,
-                        file_name="quiz.md",
-                        mime="text/markdown"
-                    )
-            except Exception as error:
-                st.error(f"Ops! {error}")
+                    response = model.generate_content(conteudo_para_ia)
+                    
+                    st.success("Pronto!")
+                    st.markdown(response.text)
+                    st.download_button("Baixar Quiz (.md)", response.text, file_name="quiz.md")
+
+        except Exception as e:
+            st.error(f"Erro ao processar este vídeo: {e}")
+            st.info("Dica: Alguns vídeos têm restrições de idade ou direitos autorais que impedem o download em servidores.")
 
 st.divider()
-st.caption("Nota: Este método usa a API de transcrição para evitar o erro 403 Forbidden.")
+st.caption("Sistema Híbrido: Prioriza legendas e usa áudio como plano B.")
