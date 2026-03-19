@@ -1,105 +1,92 @@
 import streamlit as st
 import google.generativeai as genai
-from youtube_transcript_api import YouTubeTranscriptApi
-import re
 import tempfile
 import os
 import time
 
-# Configuração
+# Configuração da Página
 st.set_page_config(page_title="Gerador de Quiz IA", page_icon="🎓")
-st.title("🎥 De Vídeo para Questionário")
+st.title("🎓 Gerador de Quiz por Arquivo")
+st.markdown("Suba um vídeo ou áudio para que a IA crie um questionário personalizado.")
 
-# EXPLICAÇÃO SOBRE A CHAVE:
-# Para rodar localmente, substitua 'SUA_NOVA_CHAVE' pela nova chave que você gerar.
-# Se for subir no Streamlit Cloud, use: API_KEY = st.secrets["GEMINI_KEY"]
-API_KEY = st.text_input("Insira sua nova Gemini API Key:", type="password")
+# --- Barra Lateral (Configurações) ---
+st.sidebar.header("⚙️ Configurações do Quiz")
 
-if API_KEY:
-    genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+# Input da API Key (Segurança)
+api_key_input = st.sidebar.text_input("Gemini API Key:", type="password", help="Pegue sua chave em aistudio.google.com")
 
-    def extrair_id(url):
-        pattern = r"(?:v=|\/|embed\/|youtu.be\/|v\/|watch\?v=|&v=|^)([0-9A-Za-z_-]{11})"
-        match = re.search(pattern, url)
-        return match.group(1) if match else None
+# Parâmetros do Quiz
+num_questoes = st.sidebar.slider("Número de questões:", min_value=1, max_value=15, value=5)
+dificuldade = st.sidebar.selectbox("Nível de dificuldade:", ["Fácil", "Intermediário", "Difícil"])
 
-    def obter_legendas(v_id):
-        try:
-            t_list = YouTubeTranscriptApi.list_transcripts(v_id)
+# --- Área de Upload ---
+st.info("💡 Formatos suportados: MP4, MP3, WAV, M4A")
+arquivo_usuario = st.file_uploader("Escolha o arquivo de vídeo ou áudio:", type=["mp4", "mp3", "wav", "m4a"])
+
+if arquivo_usuario:
+    if not api_key_input:
+        st.error("⚠️ Por favor, insira sua API Key na barra lateral para continuar.")
+    else:
+        # Configura a IA
+        genai.configure(api_key=api_key_input)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+
+        # Botão para Iniciar Processamento
+        if st.button("✨ Gerar Questionário", type="primary"):
             try:
-                t = t_list.find_transcript(['pt', 'en'])
-            except:
-                t = next(iter(t_list))
-            return " ".join([i['text'] for i in t.fetch()])
-        except:
-            return None
+                # 1. Salva arquivo temporário
+                with tempfile.NamedTemporaryFile(delete=False, suffix=f".{arquivo_usuario.name.split('.')[-1]}") as tmp:
+                    tmp.write(arquivo_usuario.read())
+                    path_temp = tmp.name
 
-    # --- Interface em Abas ---
-    aba_link, aba_upload = st.tabs(["🔗 Link do YouTube", "📁 Upload de Arquivo"])
-    conteudo_para_ia = None
+                with st.status("Processando conteúdo...") as status:
+                    # 2. Upload para o Google
+                    status.update(label="Fazendo upload para o servidor da IA...", state="running")
+                    file_ai = genai.upload_file(path=path_temp)
 
-    with aba_link:
-        video_url = st.text_input("URL do Vídeo:", placeholder="https://www.youtube.com/watch?v=...")
-        if video_url:
-            v_id = extrair_id(video_url)
-            if v_id:
-                with st.spinner("Buscando legendas..."):
-                    texto = obter_legendas(v_id)
-                    if texto:
-                        st.success("Legendas encontradas!")
-                        conteudo_para_ia = [f"Baseado nesta transcrição em português, crie o quiz:\n\n{texto}"]
-                    else:
-                        st.warning("Vídeo sem legendas disponíveis. Use a aba de Upload.")
-
-    with aba_upload:
-        arquivo_video = st.file_uploader("Suba o vídeo ou áudio (MP4, MP3, WAV):", type=["mp4", "mp3", "wav", "m4a"])
-        if arquivo_video:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{arquivo_video.name.split('.')[-1]}") as tmp_file:
-                tmp_file.write(arquivo_video.read())
-                path_temp = tmp_file.name
-
-            with st.spinner("Enviando para o Gemini (isso pode demorar dependendo do tamanho)..."):
-                try:
-                    file_upload = genai.upload_file(path=path_temp)
-                    # Aguarda o processamento do arquivo no Google
-                    while file_upload.state.name == "PROCESSING":
+                    # 3. Aguarda processamento do arquivo
+                    while file_ai.state.name == "PROCESSING":
                         time.sleep(2)
-                        file_upload = genai.get_file(file_upload.name)
+                        file_ai = genai.get_file(file_ai.name)
                     
-                    conteudo_para_ia = [file_upload, "Analise este arquivo e crie um quiz em português."]
-                    st.success("Arquivo pronto para processamento!")
-                except Exception as e:
-                    st.error(f"Erro no upload: {e}")
-                finally:
-                    if os.path.exists(path_temp):
-                        os.remove(path_temp)
+                    if file_ai.state.name == "FAILED":
+                        raise Exception("Falha no processamento do arquivo pelo Google.")
 
-    # --- Botão de Geração ---
-    if st.button("✨ Gerar Questionário", type="primary"):
-        if not conteudo_para_ia:
-            st.error("Adicione um link com legendas ou faça upload de um arquivo.")
-        else:
-            with st.spinner("IA Gerando questões..."):
-                prompt = """
-                Crie um questionário com:
-                - 05 questões de múltipla escolha (A, B, C, D).
-                - Use Markdown: ## para perguntas.
-                - Resposta correta em negrito ao final de cada questão.
-                - Tudo em PORTUGUÊS.
-                """
-                try:
-                    # Unifica o conteúdo (seja texto ou arquivo) com o prompt
-                    final_content = conteudo_para_ia + [prompt] if isinstance(conteudo_para_ia, list) else [conteudo_para_ia, prompt]
-                    response = model.generate_content(final_content)
+                    # 4. Geração do conteúdo
+                    status.update(label=f"Criando {num_questoes} questões nível {dificuldade}...", state="running")
                     
-                    st.markdown("---")
-                    st.markdown(response.text)
-                    st.download_button("📥 Baixar Quiz", response.text, file_name="quiz.md")
-                except Exception as e:
-                    st.error(f"Erro ao gerar: {e}")
-else:
-    st.info("Aguardando API Key para iniciar...")
+                    prompt = f"""
+                    Analise o arquivo de áudio/vídeo enviado e crie um questionário:
+                    - Idioma: Português.
+                    - Quantidade: {num_questoes} questões de múltipla escolha.
+                    - Dificuldade: Nível {dificuldade}.
+                    - Formato: Markdown com '##' para perguntas e opções A, B, C, D.
+                    - Gabarito: Indique a resposta correta em **negrito** ao final de cada questão com uma breve explicação do porquê.
+                    """
+
+                    response = model.generate_content([file_ai, prompt])
+                    
+                    status.update(label="Quiz gerado com sucesso!", state="complete")
+
+                # Exibição do Resultado
+                st.markdown("---")
+                st.markdown(response.text)
+                
+                # Botão de Download
+                st.download_button(
+                    label="📥 Baixar Questionário (.md)",
+                    data=response.text,
+                    file_name=f"quiz_{dificuldade}.md",
+                    mime="text/markdown"
+                )
+
+            except Exception as e:
+                st.error(f"Ocorreu um erro: {e}")
+            
+            finally:
+                # Limpeza de segurança
+                if 'path_temp' in locals() and os.path.exists(path_temp):
+                    os.remove(path_temp)
 
 st.divider()
-st.caption("Nota: Se o vídeo do YouTube não tiver legendas, baixe-o e use a aba de Upload.")
+st.caption("Nota: O tempo de geração depende do tamanho do arquivo enviado.")
