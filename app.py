@@ -1,80 +1,97 @@
+
+
+
+
+
 import streamlit as st
 import google.generativeai as genai
 from youtube_transcript_api import YouTubeTranscriptApi
 import re
 
 # Configuração da Página
-st.set_page_config(page_title="Gerador de Quiz de Vídeo", page_icon="🎓")
-st.title("🎥 Vídeo para Questionário (Via Transcrição)")
-st.markdown("Transforme vídeos do YouTube em 5 questões de múltipla escolha instantaneamente.")
+st.set_page_config(page_title="Gerador de Quiz IA", page_icon="🎓", layout="centered")
 
-# 1. Configurar API Key (Na barra lateral)
-st.sidebar.header("Configurações")
+st.title("🎥 YouTube para Questionário")
+st.markdown("Cole o link de um vídeo para gerar 5 questões de múltipla escolha com o Gemini.")
+
+# 1. Configurar API Key na barra lateral
+st.sidebar.header("Configurações de IA")
 api_key_input = "AIzaSyBxuQS66hAUkl_pg7Ozx28rup3r6BAODUA"
 
-def extrair_video_id(url):
-    """Extrai o ID do vídeo de diversos formatos de URL do YouTube"""
-    padrao = r"(?:v=|\/)([0-9A-Za-z_-]{11}).*"
-    resultado = re.search(padrao, url)
-    return resultado.group(1) if resultado else None
 
+def extrair_video_id(url):
+    """Extrai o ID do vídeo de URLs do YouTube (curtas ou longas)"""
+    reg_exp = r"(?:v=|\/)([0-9A-Za-z_-]{11}).*"
+    match = re.search(reg_exp, url)
+    return match.group(1) if match else None
+
+def buscar_legenda(video_id):
+    """Busca a melhor legenda disponível (Manual ou Automática)"""
+    try:
+        # Tenta listar todas as legendas disponíveis para o vídeo
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+        # Tenta buscar em Português (pt), senão Inglês (en)
+        try:
+            transcript = transcript_list.find_transcript(['pt', 'en'])
+        except:
+            # Se não achar pt/en, pega a primeira disponível (qualquer idioma)
+            transcript = next(iter(transcript_list))
+            
+        data = transcript.fetch()
+        return " ".join([t['text'] for t in data])
+    except Exception as e:
+        raise Exception(f"Não foi possível obter a legenda: {str(e)}")
+
+# Fluxo Principal
 if api_key_input:
     genai.configure(api_key=api_key_input)
-    # Usando o modelo Flash que é rápido e ótimo para textos
+    # Modelo Flash: Rápido e perfeito para processar texto de legendas
     model = genai.GenerativeModel('gemini-2.5-flash')
 
-    # 2. Input do Usuário
-    video_url = st.text_input("Cole a URL do vídeo do YouTube aqui:")
+    video_url = st.text_input("URL do Vídeo do YouTube:", placeholder="https://www.youtube.com/watch?v=...")
 
     if st.button("Gerar Questionário"):
         if not video_url:
-            st.error("Por favor, insira uma URL válida.")
+            st.warning("Por favor, insira uma URL.")
         else:
-            video_id = extrair_video_id(video_url)
-            
-            if not video_id:
-                st.error("Não foi possível identificar o ID do vídeo. Verifique a URL.")
+            v_id = extrair_video_id(video_url)
+            if not v_id:
+                st.error("URL Inválida! Verifique o link do YouTube.")
             else:
                 try:
-                    with st.spinner("Buscando transcrição do vídeo..."):
-                        # Tentativa 1: Buscar legendas específicas
-                        try:
-                            # Tenta buscar em Português ou Inglês
-                            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['pt', 'en'])
-                        except:
-                            # Tentativa 2: Pega a primeira legenda disponível (qualquer uma)
-                            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                            transcript = transcript_list.find_transcript(['pt', 'en']).fetch()
-                        
-                        full_text = " ".join([t['text'] for t in transcript])
+                    with st.spinner("Lendo conteúdo do vídeo..."):
+                        texto_video = buscar_legenda(v_id)
 
-                    with st.spinner("O Gemini está elaborando as questões..."):
-                        # Prompt otimizado
+                    with st.spinner("Gemini elaborando questões..."):
                         prompt = f"""
-                        Com base na transcrição do vídeo abaixo, crie um questionário:
-                        1. Gere exatamente 05 questões de múltipla escolha.
-                        2. Cada questão deve ter exatamente 04 alternativas (A, B, C, D).
-                        3. Use formatação Markdown clara (## para perguntas).
+                        Baseado na transcrição abaixo, crie um questionário:
+                        1. Exatamente 05 questões de múltipla escolha.
+                        2. Exatamente 04 alternativas por questão (A, B, C, D).
+                        3. Formatação Markdown (## para Questões).
                         4. Indique a alternativa correta em negrito abaixo das opções.
                         
                         Transcrição:
-                        {full_text}
+                        {texto_video}
                         """
-                        
                         response = model.generate_content(prompt)
 
-                        # Exibição do Resultado
-                        st.success("Questionário Gerado!")
+                        st.success("Pronto!")
                         st.markdown("---")
                         st.markdown(response.text)
                         
-                        st.download_button("Baixar Questionário (.md)", response.text, file_name="quiz.md")
+                        # Opção de download
+                        st.download_button(
+                            label="Baixar Questionário",
+                            data=response.text,
+                            file_name="questionario_video.md",
+                            mime="text/markdown"
+                        )
 
-                except Exception as e:
-                    st.error(f"Erro ao processar: {e}")
+                except Exception as error:
+                    st.error(f"Erro no processamento: {error}")
 else:
-    st.warning("⚠️ Insira sua Gemini API Key na barra lateral para começar.")
+    st.info("💡 Digite sua API Key na barra lateral para ativar o gerador.")
 
-st.markdown("---")
-st.caption("Desenvolvido para fins educacionais usando Google Gemini 1.5 Flash.")
-
+st.divider()
+st.caption("Nota: Este app depende de legendas disponíveis no vídeo.")
