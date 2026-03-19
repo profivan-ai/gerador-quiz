@@ -29,7 +29,7 @@ if arquivo_usuario:
     else:
         # Configura a IA
         genai.configure(api_key=api_key_input)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         # Botão para Iniciar Processamento
         if st.button("✨ Gerar Questionário", type="primary"):
