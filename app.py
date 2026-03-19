@@ -13,7 +13,7 @@ st.title("🎓 Gerador de Quiz Profissional")
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
 except Exception as e:
     st.error("Erro: API Key não encontrada nos Secrets do Streamlit.")
     st.stop() # Interrompe o app se a chave não estiver configurada
