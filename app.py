@@ -1,65 +1,82 @@
 import streamlit as st
 import google.generativeai as genai
-import yt_dlp
-import os
-import time
+from youtube_transcript_api import YouTubeTranscriptApi
+import re
 
 # Configuração da Página
 st.set_page_config(page_title="Gerador de Quiz de Vídeo", page_icon="🎓")
-st.title("🎥 Vídeo para Questionário")
-st.markdown("Cole a URL do vídeo e receba 5 questões em Markdown.")
+st.title("🎥 Vídeo para Questionário (Via Transcrição)")
+st.markdown("Transforme vídeos do YouTube em 5 questões de múltipla escolha instantaneamente.")
 
-# 1. Configurar API (Pega das 'Secrets' do ambiente de hospedagem)
-API_KEY = "AIzaSyBxuQS66hAUkl_pg7Ozx28rup3r6BAODUA"
+# 1. Configurar API Key (Na barra lateral)
+st.sidebar.header("Configurações")
+api_key_input = "AIzaSyBxuQS66hAUkl_pg7Ozx28rup3r6BAODUA"
 
-if API_KEY:
-    genai.configure(api_key=API_KEY)
+def extrair_video_id(url):
+    """Extrai o ID do vídeo de diversos formatos de URL do YouTube"""
+    padrao = r"(?:v=|\/)([0-9A-Za-z_-]{11}).*"
+    resultado = re.search(padrao, url)
+    return resultado.group(1) if resultado else None
+
+if api_key_input:
+    genai.configure(api_key=api_key_input)
+    # Usando o modelo Flash que é rápido e ótimo para textos
     model = genai.GenerativeModel('gemini-2.5-flash')
 
     # 2. Input do Usuário
-    video_url = st.text_input("URL do Vídeo (YouTube, etc.):")
+    video_url = st.text_input("Cole a URL do vídeo do YouTube aqui:")
 
     if st.button("Gerar Questionário"):
         if not video_url:
-            st.error("Por favor, insira uma URL.")
+            st.error("Por favor, insira uma URL válida.")
         else:
-            with st.spinner("Baixando áudio e processando..."):
+            video_id = extrair_video_id(video_url)
+            
+            if not video_id:
+                st.error("Não foi possível identificar o ID do vídeo. Verifique a URL.")
+            else:
                 try:
-                    # Configuração para baixar apenas o áudio (mais rápido)
-                    ydl_opts = {
-                        'format': 'm4a/bestaudio/best',
-                        'outtmpl': 'temp_audio.%(ext)s',
-                    }
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(video_url, download=True)
-                        audio_filename = ydl.prepare_filename(info)
+                    with st.spinner("Buscando transcrição do vídeo..."):
+                        # Tenta buscar em Português, senão tenta Inglês ou Automática
+                        try:
+                            transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['pt', 'en'])
+                        except:
+                            # Fallback para qualquer legenda disponível (inclusive gerada automaticamente)
+                            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id).find_transcript(['pt', 'en']).fetch()
+                        
+                        full_text = " ".join([t['text'] for t in transcript_list])
 
-                    # 3. Upload para o Gemini
-                    video_file = genai.upload_file(path=audio_filename)
+                    with st.spinner("O Gemini está elaborando as questões..."):
+                        # Prompt otimizado para texto
+                        prompt = f"""
+                        Com base na transcrição do vídeo abaixo, crie um questionário:
+                        1. Gere exatamente 05 questões de múltipla escolha.
+                        2. Cada questão deve ter exatamente 04 alternativas (A, B, C, D).
+                        3. Use formatação Markdown clara (## para perguntas).
+                        4. Indique a alternativa correta em negrito logo abaixo das opções de cada questão.
+                        
+                        Transcrição:
+                        {full_text}
+                        """
+                        
+                        response = model.generate_content(prompt)
 
-                    while video_file.state.name == "PROCESSING":
-                        time.sleep(3)
-                        video_file = genai.get_file(video_file.name)
-
-                    # 4. Prompt
-                    prompt = """
-                    Analise este vídeo e crie um questionário:
-                    - 05 questões de múltipla escolha.
-                    - 04 alternativas por questão.
-                    - Formato Markdown.
-                    - Indique a resposta correta em negrito.
-                    """
-
-                    response = model.generate_content([video_file, prompt])
-
-                    # 5. Resultado
-                    st.markdown("### ✅ Questionário Gerado")
-                    st.markdown(response.text)
-                    
-                    # Limpeza
-                    os.remove(audio_filename)
+                        # Exibição do Resultado
+                        st.success("Questionário Gerado com Sucesso!")
+                        st.markdown("---")
+                        st.markdown(response.text)
+                        
+                        # Botão para copiar/baixar o texto
+                        st.download_button("Baixar Questionário (.md)", response.text, file_name="quiz.md")
 
                 except Exception as e:
-                    st.error(f"Erro: {e}")
+                    if "Subtitles are disabled" in str(e):
+                        st.error("Este vídeo não possui legendas/transcrição habilitadas. Tente outro vídeo.")
+                    else:
+                        st.error(f"Ocorreu um erro: {e}")
 else:
-    st.info("Aguardando API Key para começar...")
+    st.warning("⚠️ Insira sua Gemini API Key na barra lateral para começar.")
+
+st.markdown("---")
+st.caption("Desenvolvido para fins educacionais usando Google Gemini 1.5 Flash.")
+
