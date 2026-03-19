@@ -1,17 +1,106 @@
 import streamlit as st
 import google.generativeai as genai
 from youtube_transcript_api import YouTubeTranscriptApi
-from pytubefix import YouTube
 import re
+import tempfile
 import os
-import time
 
 # Configuração
 st.set_page_config(page_title="Gerador de Quiz IA", page_icon="🎓")
-st.title("🎥 YouTube para Questionário")
+st.title("🎥 De Vídeo para Questionário")
+st.markdown("Transforme vídeos do YouTube ou arquivos locais em questões de estudo.")
 
-# API Key fixa
+# API Key (Substitua pela sua ou use st.secrets)
 API_KEY = "AIzaSyBxuQS66hAUkl_pg7Ozx28rup3r6BAODUA"
+genai.configure(api_key=API_KEY)
+model = genai.GenerativeModel('gemini-2.5-flash')
+
+def extrair_id(url):
+    pattern = r"(?:v=|\/|embed\/|youtu.be\/|v\/|watch\?v=|&v=|^)([0-9A-Za-z_-]{11})"
+    match = re.search(pattern, url)
+    return match.group(1) if match else None
+
+def obter_legendas(v_id):
+    try:
+        t_list = YouTubeTranscriptApi.list_transcripts(v_id)
+        try:
+            t = t_list.find_transcript(['pt', 'en'])
+        except:
+            t = next(iter(t_list))
+        return " ".join([i['text'] for i in t.fetch()])
+    except:
+        return None
+
+# --- Interface em Abas ---
+aba_link, aba_upload = st.tabs(["🔗 Link do YouTube", "📁 Upload de Arquivo"])
+
+conteudo_para_ia = None
+
+with aba_link:
+    video_url = st.text_input("URL do Vídeo:", placeholder="https://www.youtube.com/watch?v=...")
+    if video_url:
+        v_id = extrair_id(video_url)
+        if v_id:
+            with st.spinner("Buscando legendas..."):
+                texto = obter_legendas(v_id)
+                if texto:
+                    st.success("Legendas encontradas!")
+                    conteudo_para_ia = [f"Baseado nesta transcrição, crie o quiz:\n\n{texto}"]
+                else:
+                    st.warning("Este vídeo não possui legendas disponíveis. Use a aba de Upload.")
+
+with aba_upload:
+    arquivo_video = st.file_uploader("Suba o vídeo ou áudio (MP4, MP3, WAV):", type=["mp4", "mp3", "wav", "m4a"])
+    if arquivo_video:
+        # Salva temporariamente para enviar ao Gemini
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{arquivo_video.name.split('.')[-1]}") as tmp_file:
+            tmp_file.write(arquivo_video.read())
+            path_temp = tmp_file.name
+
+        with st.spinner("Enviando arquivo para a IA analisar..."):
+            try:
+                # Upload para a API do Google (suporta vídeo/áudio nativamente)
+                video_file_ai = genai.upload_file(path=path_temp)
+                conteudo_para_ia = [video_file_ai, "Analise o conteúdo deste arquivo e crie o questionário."]
+                st.success("Arquivo processado com sucesso!")
+            except Exception as e:
+                st.error(f"Erro no upload: {e}")
+            finally:
+                if os.path.exists(path_temp):
+                    os.remove(path_temp)
+
+# --- Processamento Final ---
+if st.button("✨ Gerar Questionário Agora", type="primary"):
+    if not conteudo_para_ia:
+        st.error("Por favor, forneça um vídeo via link ou upload primeiro.")
+    else:
+        with st.spinner("A IA está elaborando as questões..."):
+            prompt = """
+            Crie um questionário com:
+            - 05 questões de múltipla escolha (A, B, C, D).
+            - Formato Markdown: ## para cada pergunta.
+            - Resposta correta em negrito ao final de cada questão.
+            - O questionário deve ser em Português.
+            """
+            
+            try:
+                # O Gemini 1.5 Flash aceita tanto texto quanto arquivos na mesma lista
+                response = model.generate_content(conteudo_para_ia + [prompt])
+                
+                st.markdown("---")
+                st.markdown(response.text)
+                
+                st.download_button(
+                    label="📥 Baixar Quiz (.md)",
+                    data=response.text,
+                    file_name="quiz_gerado.md",
+                    mime="text/markdown"
+                )
+            except Exception as e:
+                st.error(f"Erro ao gerar conteúdo: {e}")
+
+st.divider()
+st.caption("Dica: O upload de arquivo funciona melhor para vídeos sem legenda ou conteúdos privados.")
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
