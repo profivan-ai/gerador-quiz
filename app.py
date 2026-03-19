@@ -37,23 +37,25 @@ if api_key_input:
             else:
                 try:
                     with st.spinner("Buscando transcrição do vídeo..."):
-                        # Tenta buscar em Português, senão tenta Inglês ou Automática
+                        # Tentativa 1: Buscar legendas específicas
                         try:
-                            transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['pt', 'en'])
+                            # Tenta buscar em Português ou Inglês
+                            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['pt', 'en'])
                         except:
-                            # Fallback para qualquer legenda disponível (inclusive gerada automaticamente)
-                            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id).find_transcript(['pt', 'en']).fetch()
+                            # Tentativa 2: Pega a primeira legenda disponível (qualquer uma)
+                            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                            transcript = transcript_list.find_transcript(['pt', 'en']).fetch()
                         
-                        full_text = " ".join([t['text'] for t in transcript_list])
+                        full_text = " ".join([t['text'] for t in transcript])
 
                     with st.spinner("O Gemini está elaborando as questões..."):
-                        # Prompt otimizado para texto
+                        # Prompt otimizado
                         prompt = f"""
                         Com base na transcrição do vídeo abaixo, crie um questionário:
                         1. Gere exatamente 05 questões de múltipla escolha.
                         2. Cada questão deve ter exatamente 04 alternativas (A, B, C, D).
                         3. Use formatação Markdown clara (## para perguntas).
-                        4. Indique a alternativa correta em negrito logo abaixo das opções de cada questão.
+                        4. Indique a alternativa correta em negrito abaixo das opções.
                         
                         Transcrição:
                         {full_text}
@@ -62,18 +64,14 @@ if api_key_input:
                         response = model.generate_content(prompt)
 
                         # Exibição do Resultado
-                        st.success("Questionário Gerado com Sucesso!")
+                        st.success("Questionário Gerado!")
                         st.markdown("---")
                         st.markdown(response.text)
                         
-                        # Botão para copiar/baixar o texto
                         st.download_button("Baixar Questionário (.md)", response.text, file_name="quiz.md")
 
                 except Exception as e:
-                    if "Subtitles are disabled" in str(e):
-                        st.error("Este vídeo não possui legendas/transcrição habilitadas. Tente outro vídeo.")
-                    else:
-                        st.error(f"Ocorreu um erro: {e}")
+                    st.error(f"Erro ao processar: {e}")
 else:
     st.warning("⚠️ Insira sua Gemini API Key na barra lateral para começar.")
 
